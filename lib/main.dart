@@ -1,6 +1,8 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'call_service.dart';
+import 'permissions.dart';
 
 void main() => runApp(const CallApp());
 
@@ -15,42 +17,33 @@ class _CallAppState extends State<CallApp> {
   final _remote = RTCVideoRenderer();
 
   // Change these when running on two devices
-  final String myId = 'bob'; // device A: 'alice', device B: 'bob'
-  final String peerId = 'alice';
+  final String myId = 'alice'; // device A: 'alice', device B: 'bob'
+  final String peerId = 'bob';
 
   final String wsUrl = 'wss://webrtc-1-ad8ace118f66.herokuapp.com/';
   final String? signalingSecret =
       null; // set if you configured SIGNALING_SECRET
 
-  // CHANGED: make CallService non-null and create it immediately in initState()
   late final CallService call;
-
-  // CHANGED: small flag so we can disable buttons until setup completes
-  bool ready = false;
+  bool ready = false; // disable buttons until setup completes
 
   @override
   void initState() {
     super.initState();
 
-    // CHANGED: create CallService synchronously so AppBar/ValueListenableBuilder
-    // can read call.callState without a late-initialization error.
+    // Create CallService immediately (prevents late-init errors in UI)
     call = CallService(
       userId: myId,
       wsUrl: wsUrl,
       signalingSecret: signalingSecret,
     );
 
-    // CHANGED: set callbacks before async work
-    call.onLocalStream = (MediaStream? s) {
-      setState(() {
-        _local.srcObject = s;
-      });
-    };
-    call.onRemoteStream = (MediaStream? s) {
-      setState(() {
-        _remote.srcObject = s;
-      });
-    };
+    // Hook streams to the renderers
+    call.onLocalStream =
+        (MediaStream? s) => setState(() => _local.srcObject = s);
+    call.onRemoteStream =
+        (MediaStream? s) => setState(() => _remote.srcObject = s);
+
     call.onIncomingOffer = ({
       required String fromUserId,
       required String sdp,
@@ -65,8 +58,11 @@ class _CallAppState extends State<CallApp> {
               content: Text('From: $fromUserId  •  Video: $video'),
               actions: [
                 TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
+                  onPressed: () async {
+                    // Ask for mic/camera before accepting
+                    final ok = await ensureAvPermissions(video: video);
+                    if (!ok) return;
+                    if (mounted) Navigator.of(context).pop();
                     call.acceptCall(
                       fromUserId: fromUserId,
                       sdp: sdp,
@@ -76,9 +72,7 @@ class _CallAppState extends State<CallApp> {
                   child: const Text('Answer'),
                 ),
                 TextButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                  },
+                  onPressed: () => Navigator.of(context).pop(),
                   child: const Text('Decline'),
                 ),
               ],
@@ -86,8 +80,7 @@ class _CallAppState extends State<CallApp> {
       );
     };
 
-    // CHANGED: run the async setup after call exists
-    _init();
+    _init(); // async setup
   }
 
   Future<void> _init() async {
@@ -95,11 +88,7 @@ class _CallAppState extends State<CallApp> {
     await _remote.initialize();
 
     await call.connectSignaling();
-
-    // CHANGED: mark UI as ready (reenable buttons)
-    setState(() {
-      ready = true;
-    });
+    setState(() => ready = true);
   }
 
   @override
@@ -116,7 +105,7 @@ class _CallAppState extends State<CallApp> {
         appBar: AppBar(
           title: ValueListenableBuilder<String>(
             valueListenable: call.callState,
-            builder: (_, state, __) => Text('1:1 Call • $state'),
+            builder: (_, state, __) => Text('1:1 Call $myId • $state'),
           ),
         ),
         body: Column(
@@ -142,18 +131,27 @@ class _CallAppState extends State<CallApp> {
                 alignment: WrapAlignment.center,
                 spacing: 12,
                 children: [
-                  // CHANGED: disable buttons until ready so we don’t call before setup
                   ElevatedButton(
                     onPressed:
                         ready
-                            ? () => call.startCall(peerId, video: true)
+                            ? () async {
+                              final ok = await ensureAvPermissions(video: true);
+                              if (!ok) return;
+                              call.startCall(peerId, video: true);
+                            }
                             : null,
                     child: const Text('Call (Video)'),
                   ),
                   ElevatedButton(
                     onPressed:
                         ready
-                            ? () => call.startCall(peerId, video: false)
+                            ? () async {
+                              final ok = await ensureAvPermissions(
+                                video: false,
+                              );
+                              if (!ok) return;
+                              call.startCall(peerId, video: false);
+                            }
                             : null,
                     child: const Text('Call (Audio)'),
                   ),
